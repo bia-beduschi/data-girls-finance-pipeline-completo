@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Data Girls Finance — Dashboard Credit Score</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0f1220;
+    --card: #191d33;
+    --accent: #b30b19;
+    --accent2: #10173d;
+    --text: #f4f4f6;
+    --muted: #9aa0b4;
+    --good: #2ecc71;
+    --standard: #f1c40f;
+    --poor: #e74c3c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: 'Segoe UI', Arial, sans-serif;
+    background: linear-gradient(160deg, #0f1220 0%, #171b30 100%);
+    color: var(--text);
+    padding: 32px;
+  }
+  header { margin-bottom: 28px; }
+  header h1 { margin: 0 0 4px 0; font-size: 26px; }
+  header p { margin: 0; color: var(--muted); font-size: 14px; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 18px;
+    margin-bottom: 24px;
+  }
+  .kpi {
+    background: var(--card);
+    border-radius: 14px;
+    padding: 20px;
+    border: 1px solid rgba(255,255,255,0.06);
+  }
+  .kpi .label { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: .05em; }
+  .kpi .value { font-size: 30px; font-weight: 700; margin-top: 6px; }
+  .kpi.good .value { color: var(--good); }
+  .kpi.standard .value { color: var(--standard); }
+  .kpi.poor .value { color: var(--poor); }
+  .charts {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+  }
+  .chart-card {
+    background: var(--card);
+    border-radius: 14px;
+    padding: 20px;
+    border: 1px solid rgba(255,255,255,0.06);
+  }
+  .chart-card.full { grid-column: 1 / -1; }
+  .chart-card h3 { margin: 0 0 14px 0; font-size: 15px; color: var(--text); font-weight: 600; }
+  .chart-card .subtitle { color: var(--muted); font-size: 12px; margin: -10px 0 14px 0; }
+  canvas { max-height: 320px; }
+  footer { margin-top: 24px; color: var(--muted); font-size: 12px; text-align: center; }
+  .badge {
+    display: inline-block;
+    background: rgba(179,11,25,0.15);
+    color: #ff6b7a;
+    border: 1px solid rgba(179,11,25,0.4);
+    border-radius: 999px;
+    padding: 3px 10px;
+    font-size: 11px;
+    margin-left: 8px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>💰 Data Girls Finance <span class="badge">BÔNUS · Power BI / Dashboard</span></h1>
+  <p>Camada Trusted (train.csv tratado) — Total de clientes, distribuição por classificação de Credit Score e renda mensal por categoria.</p>
+</header>
+
+<div class="grid">
+  <div class="kpi">
+    <div class="label">Total de Clientes</div>
+    <div class="value" id="kpi-total">—</div>
+  </div>
+  <div class="kpi good">
+    <div class="label">Good</div>
+    <div class="value" id="kpi-good">—</div>
+  </div>
+  <div class="kpi standard">
+    <div class="label">Standard</div>
+    <div class="value" id="kpi-standard">—</div>
+  </div>
+  <div class="kpi poor">
+    <div class="label">Poor</div>
+    <div class="value" id="kpi-poor">—</div>
+  </div>
+</div>
+
+<div class="charts">
+  <div class="chart-card">
+    <h3>Distribuição de Clientes por Credit Score</h3>
+    <div class="subtitle">Classificação predominante por cliente (Customer_ID)</div>
+    <canvas id="chartScoreDist"></canvas>
+  </div>
+  <div class="chart-card">
+    <h3>Renda Mensal Média por Categoria de Score</h3>
+    <div class="subtitle">Monthly_Inhand_Salary — média e mediana</div>
+    <canvas id="chartIncomeAvg"></canvas>
+  </div>
+  <div class="chart-card full">
+    <h3>Distribuição da Renda Mensal por Faixa e Categoria de Score</h3>
+    <div class="subtitle">Quantidade de registros por faixa de Monthly_Inhand_Salary</div>
+    <canvas id="chartIncomeBand"></canvas>
+  </div>
+</div>
+
+<footer>
+  Dados calculados a partir de <code>data/raw/train.csv</code> (100.000 linhas, 12.500 clientes) após o mesmo tratamento aplicado na Task 2 (PySpark) do pipeline.
+  Gerado como entregável do item opcional "Integração com um Painel" — pode ser aberto localmente (duplo clique) ou publicado como página estática.
+</footer>
+
+<script>
+const COLORS = { GOOD: '#2ecc71', STANDARD: '#f1c40f', POOR: '#e74c3c' };
+
+const scoreDist = { GOOD: 2506, STANDARD: 5832, POOR: 4162 };
+const totalClientes = 12500;
+
+const incomeAvg = {
+  GOOD:     { mean: 5389.25, median: 3820.02 },
+  STANDARD: { mean: 4242.04, median: 3101.08 },
+  POOR:     { mean: 3375.31, median: 2671.43 }
+};
+
+const incomeBands = {
+  labels: ["0-2k","2k-4k","4k-6k","6k-8k","8k-10k","10k-15k","15k+"],
+  GOOD:     [2970, 4697, 1594, 2027, 1529, 2224, 29],
+  STANDARD: [14118, 12372, 7102, 5223, 3395, 3054, 23],
+  POOR:     [10783, 5864, 4520, 1921, 641, 903, 9]
+};
+
+document.getElementById('kpi-total').textContent = totalClientes.toLocaleString('pt-BR');
+document.getElementById('kpi-good').textContent = scoreDist.GOOD.toLocaleString('pt-BR') + ' (' + (scoreDist.GOOD/totalClientes*100).toFixed(1) + '%)';
+document.getElementById('kpi-standard').textContent = scoreDist.STANDARD.toLocaleString('pt-BR') + ' (' + (scoreDist.STANDARD/totalClientes*100).toFixed(1) + '%)';
+document.getElementById('kpi-poor').textContent = scoreDist.POOR.toLocaleString('pt-BR') + ' (' + (scoreDist.POOR/totalClientes*100).toFixed(1) + '%)';
+
+Chart.defaults.color = '#c9cce0';
+Chart.defaults.font.family = "'Segoe UI', Arial, sans-serif";
+
+new Chart(document.getElementById('chartScoreDist'), {
+  type: 'doughnut',
+  data: {
+    labels: ['Good', 'Standard', 'Poor'],
+    datasets: [{
+      data: [scoreDist.GOOD, scoreDist.STANDARD, scoreDist.POOR],
+      backgroundColor: [COLORS.GOOD, COLORS.STANDARD, COLORS.POOR],
+      borderWidth: 0
+    }]
+  },
+  options: {
+    responsive: true,
+    plugins: { legend: { position: 'bottom' } }
+  }
+});
+
+new Chart(document.getElementById('chartIncomeAvg'), {
+  type: 'bar',
+  data: {
+    labels: ['Good', 'Standard', 'Poor'],
+    datasets: [
+      {
+        label: 'Média (R$)',
+        data: [incomeAvg.GOOD.mean, incomeAvg.STANDARD.mean, incomeAvg.POOR.mean],
+        backgroundColor: '#b30b19'
+      },
+      {
+        label: 'Mediana (R$)',
+        data: [incomeAvg.GOOD.median, incomeAvg.STANDARD.median, incomeAvg.POOR.median],
+        backgroundColor: '#4a5170'
+      }
+    ]
+  },
+  options: {
+    responsive: true,
+    plugins: { legend: { position: 'bottom' } },
+    scales: { y: { beginAtZero: true, grid: { color: 'rgba(255,255,255,0.06)' } }, x: { grid: { display: false } } }
+  }
+});
+
+new Chart(document.getElementById('chartIncomeBand'), {
+  type: 'bar',
+  data: {
+    labels: incomeBands.labels,
+    datasets: [
+      { label: 'Good', data: incomeBands.GOOD, backgroundColor: COLORS.GOOD },
+      { label: 'Standard', data: incomeBands.STANDARD, backgroundColor: COLORS.STANDARD },
+      { label: 'Poor', data: incomeBands.POOR, backgroundColor: COLORS.POOR }
+    ]
+  },
+  options: {
+    responsive: true,
+    plugins: { legend: { position: 'bottom' } },
+    scales: {
+      x: { stacked: true, grid: { display: false } },
+      y: { stacked: true, grid: { color: 'rgba(255,255,255,0.06)' } }
+    }
+  }
+});
+</script>
+
+</body>
+</html>

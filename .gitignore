@@ -1,0 +1,28 @@
+# Segredos - nunca commitar
+.env
+
+# Dados (podem ser grandes e são reproduzíveis via extração)
+data/raw/*.csv
+data/processed/
+!data/raw/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# Airflow (gerado localmente ao rodar via Docker)
+logs/
+plugins/
+airflow.db
+airflow-webserver.pid
+
+# Editor
+.vscode/
+.idea/
+
+# SO
+.DS_Store
+Thumbs.db

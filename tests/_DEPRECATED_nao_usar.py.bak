@@ -1,0 +1,288 @@
+"""
+tests/test_transform.py
+
+Testes unitarios da Task 2 (limpeza e validacao de qualidade com PySpark).
+"""
+
+import os
+import sys
+
+import pytest
+from pyspark.sql import SparkSession
+
+os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
+os.environ.setdefault("PYSPARK_DRIVER_PYTHON", sys.executable)
+
+from scripts.transform.spark_cleaning import (
+    DataQualityError,
+    converter_credit_history_age,
+    limpar_amount_invested_monthly,
+    limpar_changed_credit_limit,
+    limpar_contas_cartoes_e_juros,
+    limpar_delay_from_due_date,
+    limpar_idade,
+    limpar_monthly_balance,
+    limpar_num_credit_inquiries,
+    limpar_num_of_delayed_payment,
+    limpar_num_of_loan,
+    limpar_outstanding_debt,
+    limpar_renda_anual,
+    limpar_total_emi_per_month,
+    padronizar_categoricas_com_placeholder,
+    padronizar_payment_of_min_amount,
+    remover_colunas_pii,
+    remover_duplicatas,
+    validar_qualidade_dados,
+)
+
+
+@pytest.fixture(scope="session")
+def spark():
+    """Cria UMA UNICA SparkSession compartilhada por todos os testes."""
+    sessao = (
+        SparkSession.builder.appName("testes_credit_score_cleaning")
+        .master("local[1]")
+        .config("spark.sql.shuffle.partitions", "1")
+        .config("spark.ui.enabled", "false")
+        .config("spark.driver.host", "127.0.0.1")
+        .config("spark.driver.bindAddress", "127.0.0.1")
+        .config("spark.sql.execution.arrow.pyspark.enabled", "false")
+        .getOrCreate()
+    )
+    sessao.sparkContext.setLogLevel("ERROR")
+    yield sessao
+    sessao.stop()
+
+
+class TestLimparIdade:
+    def test_remove_underscore_e_converte_para_numero(self, spark):
+        df = spark.createDataFrame([("25_",), ("40",)], ["Age"])
+        resultado = limpar_idade(df).collect()
+        assert resultado[0]["Age"] == 25.0
+        assert resultado[1]["Age"] == 40.0
+
+    def test_idade_fora_do_intervalo_valido_vira_nulo(self, spark):
+        df = spark.createDataFrame([("150",), ("-5",), ("0",), ("100",)], ["Age"])
+        resultado = limpar_idade(df).collect()
+        assert resultado[0]["Age"] is None
+        assert resultado[1]["Age"] is None
+        assert resultado[2]["Age"] is None
+        assert resultado[3]["Age"] == 100.0
+
+
+class TestLimparRendaAnual:
+    def test_renda_negativa_vira_nula(self, spark):
+        df = spark.createDataFrame([("-1000",), ("5000",)], ["Annual_Income"])
+        resultado = limpar_renda_anual(df).collect()
+        assert resultado[0]["Annual_Income"] is None
+        assert resultado[1]["Annual_Income"] == 5000.0
+
+
+class TestLimparNumOfLoan:
+    def test_valores_fora_do_intervalo_zero_a_dez_viram_nulos(self, spark):
+        df = spark.createDataFrame([("15",), ("5",), ("-2",)], ["Num_of_Loan"])
+        resultado = limpar_num_of_loan(df).collect()
+        assert resultado[0]["Num_of_Loan"] is None
+        assert resultado[1]["Num_of_Loan"] == 5.0
+        assert resultado[2]["Num_of_Loan"] is None
+
+
+class TestLimparOutstandingDebt:
+    def test_divida_negativa_vira_nula(self, spark):
+        df = spark.createDataFrame([("-500.0",), ("1200.5",)], ["Outstanding_Debt"])
+        resultado = limpar_outstanding_debt(df).collect()
+        assert resultado[0]["Outstanding_Debt"] is None
+        assert resultado[1]["Outstanding_Debt"] == 1200.5
+
+
+class TestLimparContasCartoesEJuros:
+    def test_valores_fora_do_limite_iqr_viram_nulos(self, spark):
+        df = spark.createDataFrame(
+            [(1500, 1200, 5000)],
+            ["Num_Bank_Accounts", "Num_Credit_Card", "Interest_Rate"],
+        )
+        resultado = limpar_contas_cartoes_e_juros(df).collect()
+        assert resultado[0]["Num_Bank_Accounts"] is None
+        assert resultado[0]["Num_Credit_Card"] is None
+        assert resultado[0]["Interest_Rate"] is None
+
+    def test_valores_dentro_do_limite_sao_preservados(self, spark):
+        df = spark.createDataFrame(
+            [(5, 4, 10)],
+            ["Num_Bank_Accounts", "Num_Credit_Card", "Interest_Rate"],
+        )
+        resultado = limpar_contas_cartoes_e_juros(df).collect()
+        assert resultado[0]["Num_Bank_Accounts"] == 5.0
+        assert resultado[0]["Num_Credit_Card"] == 4.0
+        assert resultado[0]["Interest_Rate"] == 10.0
+
+
+class TestLimparDelayFromDueDate:
+    def test_atraso_negativo_vira_zero(self, spark):
+        df = spark.createDataFrame([("-5",), ("10",)], ["Delay_from_due_date"])
+        resultado = limpar_delay_from_due_date(df).collect()
+        assert resultado[0]["Delay_from_due_date"] == 0
+        assert resultado[1]["Delay_from_due_date"] == 10
+
+
+class TestLimparNumOfDelayedPayment:
+    def test_valores_fora_do_intervalo_zero_a_trinta_viram_nulos(self, spark):
+        df = spark.createDataFrame([("8_",), ("35",), ("-1",)], ["Num_of_Delayed_Payment"])
+        resultado = limpar_num_of_delayed_payment(df).collect()
+        assert resultado[0]["Num_of_Delayed_Payment"] == 8.0
+        assert resultado[1]["Num_of_Delayed_Payment"] is None
+        assert resultado[2]["Num_of_Delayed_Payment"] is None
+
+
+class TestLimparChangedCreditLimit:
+    def test_placeholder_underscore_vira_nulo_e_extremo_vira_nulo(self, spark):
+        df = spark.createDataFrame([("_",), ("11.27",), ("150.5",)], ["Changed_Credit_Limit"])
+        resultado = limpar_changed_credit_limit(df).collect()
+        assert resultado[0]["Changed_Credit_Limit"] is None
+        assert resultado[1]["Changed_Credit_Limit"] == 11.27
+        assert resultado[2]["Changed_Credit_Limit"] is None
+
+
+class TestLimparNumCreditInquiries:
+    def test_valores_fora_do_intervalo_zero_a_vinte_e_cinco_viram_nulos(self, spark):
+        df = spark.createDataFrame([(4.0,), (30.0,), (-1.0,)], ["Num_Credit_Inquiries"])
+        resultado = limpar_num_credit_inquiries(df).collect()
+        assert resultado[0]["Num_Credit_Inquiries"] == 4.0
+        assert resultado[1]["Num_Credit_Inquiries"] is None
+        assert resultado[2]["Num_Credit_Inquiries"] is None
+
+
+class TestLimparTotalEmiPerMonth:
+    def test_valores_fora_do_intervalo_viram_nulos(self, spark):
+        df = spark.createDataFrame([(150.0,), (15000.0,), (-1.0,)], ["Total_EMI_per_month"])
+        resultado = limpar_total_emi_per_month(df).collect()
+        assert resultado[0]["Total_EMI_per_month"] == 150.0
+        assert resultado[1]["Total_EMI_per_month"] is None
+        assert resultado[2]["Total_EMI_per_month"] is None
+
+
+class TestLimparAmountInvestedMonthly:
+    def test_valor_negativo_vira_nulo(self, spark):
+        df = spark.createDataFrame([("-50_",), ("100.5",)], ["Amount_invested_monthly"])
+        resultado = limpar_amount_invested_monthly(df).collect()
+        assert resultado[0]["Amount_invested_monthly"] is None
+        assert resultado[1]["Amount_invested_monthly"] == 100.5
+
+
+class TestLimparMonthlyBalance:
+    def test_valor_absurdamente_negativo_vira_nulo(self, spark):
+        df = spark.createDataFrame([("-33333333333333333333333333_",), ("300.5",)], ["Monthly_Balance"])
+        resultado = limpar_monthly_balance(df).collect()
+        assert resultado[0]["Monthly_Balance"] is None
+        assert resultado[1]["Monthly_Balance"] == 300.5
+
+
+class TestConverterCreditHistoryAge:
+    def test_converte_anos_e_meses_para_total_em_meses(self, spark):
+        df = spark.createDataFrame([("22 Years and 1 Months",), (None,)], ["Credit_History_Age"])
+        resultado_df = converter_credit_history_age(df)
+        resultado = resultado_df.collect()
+        assert resultado[0]["Credit_History_Age_Months"] == 265
+        assert resultado[1]["Credit_History_Age_Months"] is None
+        assert "Credit_History_Age" not in resultado_df.columns
+
+
+class TestPadronizarCategoricas:
+    def test_placeholder_vira_unknown(self, spark):
+        df = spark.createDataFrame(
+            [("_______", "_", "!@9#%8"), ("Engineer", "Good", "High_spent_Small_value")],
+            ["Occupation", "Credit_Mix", "Payment_Behaviour"],
+        )
+        resultado = padronizar_categoricas_com_placeholder(df).collect()
+        assert resultado[0]["Occupation"] == "Unknown"
+        assert resultado[0]["Credit_Mix"] == "Unknown"
+        assert resultado[0]["Payment_Behaviour"] == "Unknown"
+        assert resultado[1]["Occupation"] == "Engineer"
+
+
+class TestPadronizarPaymentOfMinAmount:
+    def test_nm_vira_no(self, spark):
+        df = spark.createDataFrame([("NM",), ("Yes",), ("No",)], ["Payment_of_Min_Amount"])
+        resultado = padronizar_payment_of_min_amount(df).collect()
+        assert resultado[0]["Payment_of_Min_Amount"] == "No"
+        assert resultado[1]["Payment_of_Min_Amount"] == "Yes"
+        assert resultado[2]["Payment_of_Min_Amount"] == "No"
+
+
+class TestRemoverColunasPii:
+    def test_remove_name_e_ssn_quando_presentes(self, spark):
+        df = spark.createDataFrame([("Aaron", "821-00-0265", "CUS_001")], ["Name", "SSN", "Customer_ID"])
+        resultado = remover_colunas_pii(df)
+        assert "Name" not in resultado.columns
+        assert "SSN" not in resultado.columns
+        assert "Customer_ID" in resultado.columns
+
+    def test_nao_quebra_quando_colunas_pii_ja_ausentes(self, spark):
+        df = spark.createDataFrame([("CUS_001",)], ["Customer_ID"])
+        resultado = remover_colunas_pii(df)
+        assert list(resultado.columns) == ["Customer_ID"]
+
+
+class TestRemoverDuplicatas:
+    def test_remove_linha_duplicada_por_cliente_e_mes(self, spark):
+        df = spark.createDataFrame(
+            [("CUS001", "January", 100), ("CUS001", "January", 100), ("CUS001", "February", 100)],
+            ["Customer_ID", "Month", "Valor"],
+        )
+        resultado = remover_duplicatas(df)
+        assert resultado.count() == 2
+
+
+class TestValidarQualidadeDados:
+    def _df_base(self, spark, **overrides):
+        linhas = overrides.get(
+            "linhas",
+            [("CUS001", 50000.0, "STANDARD", "January"), ("CUS002", 60000.0, "GOOD", "January")],
+        )
+        return spark.createDataFrame(linhas, ["Customer_ID", "Annual_Income", "Credit_Score", "Month"])
+
+    def test_levanta_erro_quando_customer_id_e_nulo(self, spark):
+        df = spark.createDataFrame(
+            [(None, 50000.0, "STANDARD", "January"), ("CUS001", 60000.0, "GOOD", "January")],
+            ["Customer_ID", "Annual_Income", "Credit_Score", "Month"],
+        )
+        with pytest.raises(DataQualityError, match="Customer_ID nulo"):
+            validar_qualidade_dados(df)
+
+    def test_levanta_erro_quando_renda_negativa_residual(self, spark):
+        df = spark.createDataFrame(
+            [("CUS001", -100.0, "STANDARD", "January")],
+            ["Customer_ID", "Annual_Income", "Credit_Score", "Month"],
+        )
+        with pytest.raises(DataQualityError, match="renda negativa"):
+            validar_qualidade_dados(df)
+
+    def test_levanta_erro_quando_ha_pii_presente(self, spark):
+        df = spark.createDataFrame(
+            [("CUS001", 50000.0, "STANDARD", "January", "Aaron")],
+            ["Customer_ID", "Annual_Income", "Credit_Score", "Month", "Name"],
+        )
+        with pytest.raises(DataQualityError, match="LGPD"):
+            validar_qualidade_dados(df)
+
+    def test_levanta_erro_quando_ha_duplicata_de_cliente_e_mes(self, spark):
+        df = spark.createDataFrame(
+            [
+                ("CUS001", 50000.0, "STANDARD", "January"),
+                ("CUS001", 50000.0, "STANDARD", "January"),
+            ],
+            ["Customer_ID", "Annual_Income", "Credit_Score", "Month"],
+        )
+        with pytest.raises(DataQualityError, match="duplicada"):
+            validar_qualidade_dados(df)
+
+    def test_nao_levanta_erro_com_dados_validos(self, spark):
+        df = self._df_base(spark)
+        validar_qualidade_dados(df)
+
+    def test_levanta_erro_com_dataframe_vazio(self, spark):
+        df = spark.createDataFrame(
+            [], "Customer_ID STRING, Annual_Income DOUBLE, Credit_Score STRING, Month STRING"
+        )
+        with pytest.raises(DataQualityError, match="vazio"):
+            validar_qualidade_dados(df)
